@@ -7,11 +7,24 @@
 //   POST /api/paper/close  {id}           close at live mid
 //   POST /api/paper/cancel {id}           cancel at entry price (PnL 0)
 //   GET  /api/gate/check?marketId&side&sizeUsd&price=   gate verdict, no execution
+//   POST /api/voice                        audio (WAV/PCM/multipart) or JSON {text}
+//                                          → STT + intent → draft (5 min TTL)
+//   POST /api/voice/confirm {draftId}     fresh gate → paper fill
+//   POST /api/voice/cancel  {draftId}     drop the draft
+//   GET  /api/voice/draft/:id             inspect a draft
 
 import { createServer } from 'node:http'
 import { getMarkets } from './markets.js'
 import { check } from './gate.js'
 import { place, close, cancel, summary } from './paper.js'
+import {
+  handleVoice,
+  confirmDraftById,
+  cancelDraftById,
+  getDraftResponse,
+  VoiceUnavailable,
+  GroqError,
+} from './voice.js'
 
 const PORT = Number(process.env.PORT ?? 8787)
 const HOST = process.env.HOST ?? '127.0.0.1'
@@ -27,13 +40,17 @@ function send(res, status, body) {
   res.end(data)
 }
 
-async function readJson(req) {
+async function readRaw(req) {
   const chunks = []
   for await (const chunk of req) chunks.push(chunk)
-  const raw = Buffer.concat(chunks).toString('utf8')
-  if (!raw) return {}
+  return Buffer.concat(chunks)
+}
+
+async function readJson(req) {
+  const raw = await readRaw(req)
+  if (!raw.length) return {}
   try {
-    return JSON.parse(raw)
+    return JSON.parse(raw.toString('utf8'))
   } catch {
     throw new Error('invalid JSON body')
   }
@@ -103,8 +120,44 @@ const server = createServer(async (req, res) => {
       return send(res, 200, { cancelled: true, position })
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/voice') {
+      const body = await readRaw(req)
+      const result = await handleVoice({
+        contentType: req.headers['content-type'] ?? '',
+        body,
+        query: url.searchParams,
+      })
+      return send(res, result.status, result.body)
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/voice/confirm') {
+      const { draftId } = await readJson(req)
+      if (!draftId) return send(res, 400, { error: 'draftId required' })
+      const result = await confirmDraftById(draftId)
+      return send(res, result.status, result.body)
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/voice/cancel') {
+      const { draftId } = await readJson(req)
+      if (!draftId) return send(res, 400, { error: 'draftId required' })
+      const result = cancelDraftById(draftId)
+      return send(res, result.status, result.body)
+    }
+
+    if (req.method === 'GET' && url.pathname.startsWith('/api/voice/draft/')) {
+      const id = decodeURIComponent(url.pathname.slice('/api/voice/draft/'.length))
+      const result = getDraftResponse(id)
+      return send(res, result.status, result.body)
+    }
+
     return send(res, 404, { error: 'not found' })
   } catch (err) {
+    if (err instanceof VoiceUnavailable) {
+      return send(res, 503, { error: err.message })
+    }
+    if (err instanceof GroqError) {
+      return send(res, 502, { error: err.message })
+    }
     return send(res, 500, { error: String(err.message ?? err) })
   }
 })
