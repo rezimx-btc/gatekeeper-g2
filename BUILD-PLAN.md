@@ -37,9 +37,9 @@ Demo Day: 3 Dec 2026 (remote). All times below in WIB unless noted.
 
 ## Day 4 — Thu 26 Nov (positions + Telegram)
 
-- [ ] Positions screen (scrollable list, live PnL, voice/tap close)
-- [ ] Settings screen (caps, allowlist toggle)
-- [ ] Telegram approval mirror (bot token from user; Approve/Reject buttons → same gate + paper path)
+- [x] Positions screen (scrollable list, live PnL, voice/tap close) — done 24 Nov: `GET /api/paper` list + live PnL, swipe-select, tap → CloseConfirm → tap close; voice "Close position N" close langsung. E2E koordinator: voice close #7 realized +$4.14, tap close #8 via simulator (layar Closed `CLOSED #8 · $0.00 · PAPER` terfoto). Lihat `docs/day4-verification.md`.
+- [x] Settings screen (caps, allowlist toggle) — done 24 Nov: `server/src/settings.js` + `GET/POST /api/settings` + `POST /api/settings/reset`; gate pakai settings efektif; app layar Settings (tap cycle cap / toggle / reset). E2E: cap $5 → gate REJECT per-trade; daily $50 → REJECT daily; allowlist OFF → allowlist PASS; reset → defaults. Akhir: defaults $25/$100/ON.
+- [ ] Telegram approval mirror (bot token from user; Approve/Reject buttons → same gate + paper path) — DITUNDA: token belum diberikan user, jangan minta/buat/hardcode.
 
 ## Day 5 — Fri 27 Nov (polish + proof)
 
