@@ -217,7 +217,7 @@ function homeContent(): string {
     '',
     truncate(top.question, 64),
     `YES ${yesPct}% · 24h ${fmtVol(top.volume24h)}`,
-    `Book ${pnl} · ${open} open`,
+    `Book ${pnl} · ${open} open${lastError ? ' · STALE' : ''}`,
     '',
     'Tap → market',
   ].join('\n')
@@ -338,7 +338,7 @@ function positionLine(p: Position): string {
 function positionsContent(): string {
   const lines = ['POSITIONS · PAPER']
   const total = paper ? fmtUsd(paper.totalPnl) : '—'
-  lines.push(`Book ${total} · ${openPositions.length} open`)
+  lines.push(`Book ${total} · ${openPositions.length} open${lastError ? ' · STALE' : ''}`)
   if (openPositions.length === 0) {
     lines.push('No open positions')
   } else {
