@@ -41,12 +41,13 @@ Demo Day: 3 Dec 2026 (remote). All times below in WIB unless noted.
 - [x] Settings screen (caps, allowlist toggle) — done 24 Nov: `server/src/settings.js` + `GET/POST /api/settings` + `POST /api/settings/reset`; gate pakai settings efektif; app layar Settings (tap cycle cap / toggle / reset). E2E: cap $5 → gate REJECT per-trade; daily $50 → REJECT daily; allowlist OFF → allowlist PASS; reset → defaults. Akhir: defaults $25/$100/ON.
 - [ ] Telegram approval mirror (bot token from user; Approve/Reject buttons → same gate + paper path) — DITUNDA: token belum diberikan user, jangan minta/buat/hardcode.
 
-## Day 5 — Fri 27 Nov (polish + proof)
+## Day 5 — Fri 27 Nov (polish + proof) — DONE 24 Nov (dilaksanakan lebih awal)
 
-- [ ] End-to-end run in simulator: glance → voice → gate → fill → PnL → Telegram approve
-- [ ] Error states: gate REJECT with reason, API down, voice unclear
-- [ ] Simulator screenshots (automation API `--automation-port` for headless shots)
-- [ ] Decide demo-video recording setup (simulator window vs. screenshots + narration)
+- [x] End-to-end run in simulator: glance → voice → gate → fill → PnL → close (Telegram approve DITUNDA — token belum ada, bukan bagian Day 5) — E2E penuh terfoto: voice "Buy ten dollars YES" → draft → gate PASS 7/7 → voice "Yes" → FILLED #9 → Positions PnL live → tap close #9 → CLOSED #9. Regresi build baru: voice buy → fill #11 → close #11. Lihat `docs/day5-verification.md`.
+- [x] Error states: gate REJECT with reason, API down, voice unclear — ketiganya TERBUKTI live: REJECT duplicate guard + per-trade cap ($30) di layar; server mati → layar error "Market data unavailable. / Load failed / Tap to retry" (fresh start) → restart → pulih; voice "Um, uh, hmm" → "unrecognized command", tanpa fill. Known issue BARU: data basi tanpa peringatan saat server mati tapi cache ada (tidak diperbaiki — lihat day5-verification §7).
+- [x] Simulator screenshots (automation API `--automation-port` for headless shots) — 31 pasang `docs/screenshots/day5-*.png` (+ `-alpha.png`). Virtual mic (PulseAudio null sink `virtmic`) membuat layar Draft/Filled pertama kali ter-render di simulator.
+- [x] Decide demo-video recording setup (simulator window vs. screenshots + narration) — `docs/day5-video-plan.md`: ffmpeg x11grab atas display Xvfb + suara via virtual mic; take uji 10 dtk BERHASIL (display berubah tiap restart — saat ini :104). Naskah 7 babak ~160 dtk.
+- [x] Perbaikan dari E2E: `refreshData()` — paper + settings diterapkan + render dulu, markets menyusul (Positions muncul +1,0 dtk setelah scroll vs ~3,4 dtk sebelum perbaikan). npm test 31/31, npm run build bersih.
 
 ## Day 6 — Sat 28 Nov (video + package)
 
