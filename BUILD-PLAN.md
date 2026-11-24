@@ -49,12 +49,13 @@ Demo Day: 3 Dec 2026 (remote). All times below in WIB unless noted.
 - [x] Decide demo-video recording setup (simulator window vs. screenshots + narration) — `docs/day5-video-plan.md`: ffmpeg x11grab atas display Xvfb + suara via virtual mic; take uji 10 dtk BERHASIL (display berubah tiap restart — saat ini :104). Naskah 7 babak ~160 dtk.
 - [x] Perbaikan dari E2E: `refreshData()` — paper + settings diterapkan + render dulu, markets menyusul (Positions muncul +1,0 dtk setelah scroll vs ~3,4 dtk sebelum perbaikan). npm test 31/31, npm run build bersih.
 
-## Day 6 — Sat 28 Nov (video + package)
+## Day 6 — Sat 28 Nov (video + package) — DONE 24 Nov (dilaksanakan lebih awal)
 
-- [ ] Record demo video ≤ 3 min in simulator (the §2 demo script)
-- [ ] README final: setup, track, what existed before 23 Nov
-- [ ] Optional: packaged `.ehpk` build (`evenhub pack`)
-- [ ] Full dry run of the DoraHacks submission form (no submit yet)
+- [x] Record demo video ≤ 3 min in simulator (the §2 demo script) — done 24 Nov: `demo/gatekeeper-g2-demo.mp4`, 155.00 dtk, 1280×720, h264 + aac mono, 2.251.499 byte; verifikasi per babak (Draft PASS 7/7, FILLED #12, CLOSED #12 — frame dilihat langsung koordinator). Daily cap naik sementara ke $200 lalu reset ke defaults. Lihat `docs/day6-verification.md` + `docs/day6-video-notes.md`.
+- [x] README final: setup, track, what existed before 23 Nov — done 24 Nov: ditulis ulang (11 KB), gate 7 checks, Telegram planned/optional (belum dibangun), judging 25/20/20/15/20, 2nd/track $375.
+- [ ] Optional: packaged `.ehpk` build (`evenhub pack`) — DICOBA 24 Nov, GAGAL: `package_id` com.rezimx.gatekeeper-g2 ditolak (hyphen di segmen). Perbaikan = rename jadi com.rezimx.gatekeeperg2 (ubah install identity — butuh keputusan eksplisit). Opsional menurut aturan, bukan blocker.
+- [ ] Full dry run of the DoraHacks submission form (no submit yet) — TIDAK dikerjakan koordinator (butuh live browser — tugas parent, Day 7). Syarat publik sudah dikumpulkan dari halaman event, lihat `docs/day6-verification.md` §6.
+- [x] Bonus: indikator data basi (known issue Day 5) — 2 baris di `app/src/main.ts`, Book line + ` · STALE` saat `lastError` terisi; regresi hijau (test 31/31, build bersih). Cabang STALE belum difoto live (butuh server mati).
 
 ## Day 7 — Sun 29 Nov (submit)
 
