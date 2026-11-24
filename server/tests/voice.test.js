@@ -61,6 +61,67 @@ describe('parseIntentJson', () => {
     assert.equal(parseIntentJson('hello there').action, 'unsupported')
     assert.equal(parseIntentJson('').action, 'unsupported')
   })
+
+  it('parses a close intent and rejects a bad position number', () => {
+    assert.deepEqual(parseIntentJson('{"action":"close","positionId":2}'), {
+      action: 'close',
+      positionId: 2,
+    })
+    for (const bad of [0, -1, 1.5, 'two', null, undefined]) {
+      assert.equal(
+        parseIntentJson(JSON.stringify({ action: 'close', positionId: bad })).action,
+        'unsupported',
+        `positionId=${String(bad)}`,
+      )
+    }
+  })
+
+  it('parses set_cap intents (per-trade and daily) and rejects bad values', () => {
+    assert.deepEqual(parseIntentJson('{"action":"set_cap","which":"perTrade","value":10}'), {
+      action: 'set_cap',
+      which: 'perTrade',
+      value: 10,
+    })
+    assert.deepEqual(parseIntentJson('{"action":"set_cap","which":"daily","value":50}'), {
+      action: 'set_cap',
+      which: 'daily',
+      value: 50,
+    })
+    // Common model spellings of the per-trade key are normalized.
+    assert.equal(parseIntentJson('{"action":"set_cap","which":"per-trade","value":10}').which, 'perTrade')
+    for (const bad of [
+      { which: 'weekly', value: 10 },
+      { which: 'perTrade', value: 0 },
+      { which: 'perTrade', value: -5 },
+      { which: 'perTrade', value: 'ten' },
+      { which: 'daily' },
+    ]) {
+      assert.equal(
+        parseIntentJson(JSON.stringify({ action: 'set_cap', ...bad })).action,
+        'unsupported',
+        JSON.stringify(bad),
+      )
+    }
+  })
+
+  it('parses toggle_allowlist and reset_settings intents', () => {
+    assert.deepEqual(parseIntentJson('{"action":"toggle_allowlist","enabled":false}'), {
+      action: 'toggle_allowlist',
+      enabled: false,
+    })
+    assert.deepEqual(parseIntentJson('{"action":"toggle_allowlist","enabled":true}'), {
+      action: 'toggle_allowlist',
+      enabled: true,
+    })
+    assert.equal(parseIntentJson('{"action":"toggle_allowlist","enabled":"off"}').action, 'unsupported')
+    assert.deepEqual(parseIntentJson('{"action":"reset_settings"}'), { action: 'reset_settings' })
+  })
+
+  it('maps a sell action object and greetings to unsupported', () => {
+    assert.equal(parseIntentJson('{"action":"sell","side":"YES","sizeUsd":10}').action, 'unsupported')
+    assert.equal(parseIntentJson('{"action":"cancel"}').action, 'unsupported')
+    assert.equal(parseIntentJson('{"action":"greet"}').action, 'unsupported')
+  })
 })
 
 describe('normalizeYesNo', () => {
