@@ -7,6 +7,10 @@
 //   POST /api/paper/close  {id}           close at live mid
 //   POST /api/paper/cancel {id}           cancel at entry price (PnL 0)
 //   GET  /api/gate/check?marketId&side&sizeUsd&price=   gate verdict, no execution
+//   GET  /api/settings                      current gate settings (+ defaults)
+//   POST /api/settings {perTradeCapUsd?, dailyCapUsd?, allowlistEnabled?}
+//                                          update settings (400 on invalid)
+//   POST /api/settings/reset                restore defaults
 //   POST /api/voice                        audio (WAV/PCM/multipart) or JSON {text}
 //                                          → STT + intent → draft (5 min TTL)
 //   POST /api/voice/confirm {draftId}     fresh gate → paper fill
@@ -17,6 +21,7 @@ import { createServer } from 'node:http'
 import { getMarkets } from './markets.js'
 import { check } from './gate.js'
 import { place, close, cancel, summary } from './paper.js'
+import { settingsStore, SettingsValidationError } from './settings.js'
 import {
   handleVoice,
   confirmDraftById,
@@ -118,6 +123,26 @@ const server = createServer(async (req, res) => {
       const position = await cancel(id)
       if (!position) return send(res, 404, { error: 'no open position with that id' })
       return send(res, 200, { cancelled: true, position })
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/settings') {
+      return send(res, 200, settingsStore.get())
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/settings') {
+      const body = await readJson(req)
+      try {
+        return send(res, 200, settingsStore.update(body))
+      } catch (err) {
+        if (err instanceof SettingsValidationError) {
+          return send(res, 400, { error: err.message })
+        }
+        throw err
+      }
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/settings/reset') {
+      return send(res, 200, settingsStore.reset())
     }
 
     if (req.method === 'POST' && url.pathname === '/api/voice') {

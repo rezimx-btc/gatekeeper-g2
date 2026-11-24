@@ -8,7 +8,8 @@ import http from 'node:http'
 import { randomBytes } from 'node:crypto'
 import { getMarkets, livePrice } from './markets.js'
 import { check } from './gate.js'
-import { place } from './paper.js'
+import { place, close } from './paper.js'
+import { settingsStore } from './settings.js'
 
 export const DRAFT_TTL_MS = 5 * 60 * 1000
 const GROQ_BASE = 'https://api.groq.com'
@@ -22,7 +23,12 @@ export const INTENT_SYSTEM_PROMPT = [
   'Side comes from the words YES or NO in the command; default YES when neither is said.',
   'sizeUsd comes from the spoken amount ("ten dollars" -> 10, "twenty five" -> 25, "five bucks" -> 5).',
   'If there is no amount, use 10. If the amount is unclear, use 10.',
-  'Anything that is NOT a buy command — sell, close, cancel, greeting, question, unclear speech —',
+  'Close commands ("close position 2", "close my position"): {"action":"close","positionId":number}.',
+  'Settings commands:',
+  '  set a cap ("set per-trade cap to 10", "set daily cap to 50"): {"action":"set_cap","which":"perTrade"|"daily","value":number}.',
+  '  toggle the allowlist ("turn allowlist off", "enable allowlist"): {"action":"toggle_allowlist","enabled":true|false}.',
+  '  reset settings ("reset settings"): {"action":"reset_settings"}.',
+  'Anything that is NOT a buy, close or settings command — sell, cancel, greeting, question, unclear speech —',
   'reply {"action":"unsupported","reason":"<one short sentence>"}.',
 ].join('\n')
 
@@ -45,6 +51,32 @@ export function parseIntentJson(text) {
   }
   if (obj.action === 'unsupported') {
     return { action: 'unsupported', reason: String(obj.reason ?? 'unsupported command') }
+  }
+  if (obj.action === 'close') {
+    const positionId = Number(obj.positionId)
+    if (!Number.isInteger(positionId) || positionId <= 0) {
+      return { action: 'unsupported', reason: 'no valid position number to close' }
+    }
+    return { action: 'close', positionId }
+  }
+  if (obj.action === 'set_cap') {
+    const whichRaw = String(obj.which ?? '').toLowerCase().replace(/[^a-z]/g, '')
+    const which = whichRaw === 'pertrade' ? 'perTrade' : whichRaw === 'daily' ? 'daily' : null
+    const value = Number(obj.value)
+    if (!which) return { action: 'unsupported', reason: 'cap must be per-trade or daily' }
+    if (!Number.isFinite(value) || value <= 0) {
+      return { action: 'unsupported', reason: 'no usable cap value in command' }
+    }
+    return { action: 'set_cap', which, value }
+  }
+  if (obj.action === 'toggle_allowlist') {
+    if (typeof obj.enabled !== 'boolean') {
+      return { action: 'unsupported', reason: 'allowlist toggle needs on or off' }
+    }
+    return { action: 'toggle_allowlist', enabled: obj.enabled }
+  }
+  if (obj.action === 'reset_settings') {
+    return { action: 'reset_settings' }
   }
   if (obj.action !== 'buy') {
     return { action: 'unsupported', reason: 'not a buy command' }
@@ -455,8 +487,49 @@ export async function handleVoice({ contentType = '', body, query = new URLSearc
     return { status: 200, body: { ok: true, heard: 'unclear', transcript, draftId } }
   }
 
-  // New buy command: intent → market → gate → draft.
+  // New command: intent → market → gate → draft.
   const intent = await groqIntent(transcript)
+
+  // Close command: close an open paper position by number (no draft).
+  if (intent.action === 'close') {
+    let position = null
+    try {
+      position = await close(intent.positionId)
+    } catch (err) {
+      return { status: 200, body: { ok: false, action: 'close', transcript, reason: String(err.message ?? err) } }
+    }
+    if (!position) {
+      return {
+        status: 200,
+        body: { ok: false, action: 'close', transcript, reason: `No open position #${intent.positionId}` },
+      }
+    }
+    return { status: 200, body: { ok: true, action: 'close', transcript, position } }
+  }
+
+  // Settings commands: caps, allowlist toggle, reset (no draft).
+  if (
+    intent.action === 'set_cap' ||
+    intent.action === 'toggle_allowlist' ||
+    intent.action === 'reset_settings'
+  ) {
+    try {
+      let settings
+      if (intent.action === 'set_cap') {
+        settings = settingsStore.update({
+          [intent.which === 'perTrade' ? 'perTradeCapUsd' : 'dailyCapUsd']: intent.value,
+        })
+      } else if (intent.action === 'toggle_allowlist') {
+        settings = settingsStore.update({ allowlistEnabled: intent.enabled })
+      } else {
+        settings = settingsStore.reset()
+      }
+      return { status: 200, body: { ok: true, action: 'settings', transcript, settings } }
+    } catch (err) {
+      return { status: 200, body: { ok: false, action: 'settings', transcript, reason: String(err.message ?? err) } }
+    }
+  }
+
   if (intent.action !== 'buy') {
     return { status: 200, body: { ok: false, transcript, reason: intent.reason } }
   }
