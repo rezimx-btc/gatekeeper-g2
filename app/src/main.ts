@@ -459,10 +459,11 @@ async function refreshData() {
       fetch(`${SERVER_URL}/api/paper`),
       fetch(`${SERVER_URL}/api/settings`),
     ])
-    if (!mRes.ok) throw new Error(`markets HTTP ${mRes.status}`)
     if (!pRes.ok) throw new Error(`paper HTTP ${pRes.status}`)
-    const mData = (await mRes.json()) as MarketsResponse
-    markets = mData.markets ?? []
+    // Day 5 — paper + settings are fast (<10 ms); apply them FIRST so
+    // Positions / Settings render immediately instead of waiting ~3.4 s
+    // for /api/markets when its upstream cache is cold. Markets apply
+    // when ready below; a markets failure no longer discards fresh paper.
     const pData = (await pRes.json()) as PaperSummary
     paper = pData
     // Positions arrive already marked live; keep only the open ones.
@@ -477,6 +478,10 @@ async function refreshData() {
       }
     }
     clampSelections()
+    refreshDisplay()
+    if (!mRes.ok) throw new Error(`markets HTTP ${mRes.status}`)
+    const mData = (await mRes.json()) as MarketsResponse
+    markets = mData.markets ?? []
     lastError = ''
   } catch (err) {
     lastError = String(err instanceof Error ? err.message : err)
