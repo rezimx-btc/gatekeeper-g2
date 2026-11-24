@@ -94,6 +94,19 @@ export function fmtSizeUsd(sizeUsd: number): string {
   return Number.isInteger(sizeUsd) ? `$${sizeUsd}` : `$${sizeUsd.toFixed(2)}`
 }
 
+/** Day 4 — settings cap steps (server contract). Tap cycles to the next
+ *  step, wrapping to the first after the last. */
+export const PER_TRADE_CAP_STEPS = [5, 10, 15, 20, 25, 30, 40, 50, 75, 100]
+export const DAILY_CAP_STEPS = [25, 50, 75, 100, 150, 200, 300, 500, 1000]
+
+/** First step strictly greater than `current`; wraps to steps[0] when
+ *  `current` is at/above the last step. A current value between steps
+ *  (e.g. 12) jumps to the next step above it. */
+export function nextStep(steps: number[], current: number): number {
+  for (const s of steps) if (s > current) return s
+  return steps[0]
+}
+
 export type GateSummary = {
   verdict: 'PASS' | 'REJECT'
   /** e.g. "PASS 5/5" — null when the server gave no countable checks. */
@@ -227,5 +240,11 @@ if (nodeProcess && nodeProcess.argv?.[1]?.endsWith('voice.ts')) {
   const g3 = summarizeGate({ verdict: 'PASS' })
   assert(g3.verdict === 'PASS' && g3.score === null, 'gate PASS no checks -> no score')
   assert(draftLine1(10, 'yes', 0.64) === 'BUY $10 YES @ 64¢', 'draft line1')
+  // nextStep (Day 4 settings caps)
+  assert(nextStep(PER_TRADE_CAP_STEPS, 25) === 30, 'nextStep per-trade 25 -> 30')
+  assert(nextStep(PER_TRADE_CAP_STEPS, 100) === 5, 'nextStep per-trade 100 wraps -> 5')
+  assert(nextStep(PER_TRADE_CAP_STEPS, 12) === 15, 'nextStep per-trade 12 -> 15')
+  assert(nextStep(DAILY_CAP_STEPS, 100) === 150, 'nextStep daily 100 -> 150')
+  assert(nextStep(DAILY_CAP_STEPS, 1000) === 25, 'nextStep daily 1000 wraps -> 25')
   console.log(nodeProcess.exitCode ? 'SELF-TEST FAILED' : 'SELF-TEST PASSED')
 }

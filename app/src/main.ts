@@ -1,7 +1,10 @@
-// Gatekeeper — G2 app (Day 3: Home + Market + voice draft/confirm loop).
+// Gatekeeper — G2 app (Day 4: + Positions / Settings / CloseConfirm / Closed).
 // One screen, one thing, one action. All money is PAPER — every screen says so.
 // Screens: Home (top market + book PnL) → tap → Market (odds, volume, ends)
 //   → voice → Draft (action + gate verdict + confirm) → tap/ring/"Yes" → Filled.
+//   Home scroll → Positions (open positions, scrollable) → tap position →
+//   CloseConfirm (tap = close, swipe = cancel) → Closed; Positions → Settings
+//   (per-trade cap / daily cap / allowlist / reset, tap cycles or toggles).
 // Double-tap anywhere → exit (mode 1, system confirmation dialog, required on root).
 //
 // VOICE TRIGGER (Day 3 decision — see docs/day3-app-notes.md):
@@ -20,6 +23,15 @@
 //     DESIGN's "swipe = scroll list" is unused on that screen.
 //   • Mic is opened with audioControl(true) on listen start and closed
 //     with audioControl(false) on stop / cancel / exit, always.
+//
+// DAY 4 NAVIGATION (see docs/day4-app-notes.md):
+//   • Home scroll → Positions. Positions/Settings scroll = move selection
+//     (SCROLL_TOP = next row, SCROLL_BOTTOM = previous row, wraps).
+//     Swipe on Positions/Settings NEVER triggers voice (unlike Market).
+//   • Ring tap on Positions/Settings → start listening (draft mode).
+//     A voice close/settings reply is routed back to Positions/Settings
+//     (voiceOrigin), never forced to Market.
+//   • CloseConfirm scroll → cancel back to Positions. Closed tap → Positions.
 
 import {
   waitForEvenAppBridge,
@@ -39,6 +51,9 @@ import {
   summarizeGate,
   draftLine1,
   draftLine2,
+  PER_TRADE_CAP_STEPS,
+  DAILY_CAP_STEPS,
+  nextStep,
   type GateSummary,
 } from './voice'
 
@@ -78,6 +93,30 @@ type PaperSummary = {
   realizedPnl: number
   totalPnl: number
   dailyVolumeUsd: number
+  positions?: Position[]
+}
+
+/** One open paper position, as returned by GET /api/paper (already
+ *  marked live by the server). ids are numbers server-side. */
+type Position = {
+  id: number
+  marketId: string
+  question: string
+  side: string
+  sizeUsd: number
+  entryPrice: number
+  shares: number
+  status: string
+  livePrice: number | null
+  unrealizedPnl: number | null
+}
+
+type SettingsState = {
+  perTradeCapUsd: number
+  dailyCapUsd: number
+  allowlistEnabled: boolean
+  defaults?: { perTradeCapUsd: number; dailyCapUsd: number; allowlistEnabled: boolean }
+  isDefault?: boolean
 }
 
 type VoiceDraft = {
@@ -97,12 +136,41 @@ type FilledPosition = {
 
 const bridge = await waitForEvenAppBridge()
 
-let screen: 'home' | 'market' | 'draft' | 'filled' = 'home'
+type Screen =
+  | 'home'
+  | 'market'
+  | 'draft'
+  | 'filled'
+  | 'positions'
+  | 'settings'
+  | 'closeConfirm'
+  | 'closed'
+
+let screen: Screen = 'home'
 let markets: Market[] = []
 let paper: PaperSummary | null = null
 let lastError = ''
 // Short voice error shown on the Market screen (mic failure, network, …).
 let voiceError = ''
+// Open positions (from GET /api/paper), in server order.
+let openPositions: Position[] = []
+// Day 4 — settings state (GET /api/settings; null until the first good fetch).
+let settings: SettingsState | null = null
+// Short error shown on the Settings screen when a settings POST fails.
+let settingsError = ''
+// Short voice/close note shown on the Positions screen.
+let posNote = ''
+// Selected row on Positions (0..openPositions.length+1: positions, Settings, Back).
+let posSel = 0
+// Selected row on Settings (0..4: per-trade, daily, allowlist, reset, back).
+let setSel = 0
+// Position awaiting close confirmation, if any.
+let closeTarget: Position | null = null
+// Last closed position shown on the Closed screen.
+let closedInfo: { id: string; realizedPnl: number } | null = null
+// Screen a draft-mode voice session started from, so mic/voice failures
+// and non-buy replies route back there instead of always to Market.
+let voiceOrigin: 'market' | 'positions' | 'settings' = 'market'
 // Draft currently on screen, if any.
 let draft: VoiceDraft | null = null
 // Set when a confirm attempt is refused by the server's fresh gate check:
@@ -247,6 +315,84 @@ function listeningContent(): string {
   ].join('\n')
 }
 
+// ── Day 4 screens ────────────────────────────────────────────────────────
+
+function positionsRowCount(): number {
+  // Open positions + footer rows (Settings, Back).
+  return openPositions.length + 2
+}
+
+function clampSelections() {
+  const maxPos = Math.max(0, positionsRowCount() - 1)
+  if (posSel > maxPos) posSel = maxPos
+  if (posSel < 0) posSel = 0
+  if (setSel > 4) setSel = 4
+  if (setSel < 0) setSel = 0
+}
+
+function positionLine(p: Position): string {
+  const pnl = p.unrealizedPnl ?? 0
+  return `#${p.id} ${String(p.side).toUpperCase()} ${fmtSizeUsd(p.sizeUsd)} · PnL ${fmtUsd(pnl)}`
+}
+
+function positionsContent(): string {
+  const lines = ['POSITIONS · PAPER']
+  const total = paper ? fmtUsd(paper.totalPnl) : '—'
+  lines.push(`Book ${total} · ${openPositions.length} open`)
+  if (openPositions.length === 0) {
+    lines.push('No open positions')
+  } else {
+    for (let i = 0; i < openPositions.length; i++) {
+      lines.push(`${posSel === i ? '> ' : '  '}${positionLine(openPositions[i])}`)
+    }
+  }
+  const setIdx = openPositions.length
+  const backIdx = openPositions.length + 1
+  lines.push(`${posSel === setIdx ? '> ' : '  '}Settings`)
+  lines.push(`${posSel === backIdx ? '> ' : '  '}← Back`)
+  if (posNote) lines.push(truncate(posNote, 64))
+  return lines.join('\n')
+}
+
+function settingsContent(): string {
+  const lines = ['SETTINGS · PAPER']
+  const cap = settings ? `$${settings.perTradeCapUsd}` : '—'
+  const daily = settings ? `$${settings.dailyCapUsd}` : '—'
+  const allow = settings ? (settings.allowlistEnabled ? 'ON' : 'OFF') : '—'
+  const rows = [
+    `Per-trade cap ${cap}`,
+    `Daily cap ${daily}`,
+    `Allowlist ${allow}`,
+    'Reset defaults',
+    '← Back',
+  ]
+  for (let i = 0; i < rows.length; i++) {
+    lines.push(`${setSel === i ? '> ' : '  '}${rows[i]}`)
+  }
+  if (settingsError) lines.push(truncate(settingsError, 64))
+  return lines.join('\n')
+}
+
+function closeConfirmContent(): string {
+  if (!closeTarget) return 'POSITIONS · PAPER\n\nNo position selected'
+  const p = closeTarget
+  const price = p.livePrice ?? p.entryPrice
+  const pnl = p.unrealizedPnl ?? 0
+  return [
+    `CLOSE #${p.id}?`,
+    `${String(p.side).toUpperCase()} ${fmtSizeUsd(p.sizeUsd)} @ ${fmtPrice(price)} · PnL ${fmtUsd(pnl)}`,
+    'Tap to confirm · swipe to cancel',
+  ].join('\n')
+}
+
+function closedContent(): string {
+  if (!closedInfo) return 'POSITIONS · PAPER\n\nNo close recorded'
+  return [
+    `CLOSED #${closedInfo.id} · ${fmtUsd(closedInfo.realizedPnl)} · PAPER`,
+    'Tap → positions',
+  ].join('\n')
+}
+
 function currentContent(): string {
   if (listening) return listeningContent()
   switch (screen) {
@@ -258,6 +404,14 @@ function currentContent(): string {
       return draftContent()
     case 'filled':
       return filledContent()
+    case 'positions':
+      return positionsContent()
+    case 'settings':
+      return settingsContent()
+    case 'closeConfirm':
+      return closeConfirmContent()
+    case 'closed':
+      return closedContent()
   }
 }
 
@@ -300,21 +454,97 @@ function refreshDisplay() {
 
 async function refreshData() {
   try {
-    const [mRes, pRes] = await Promise.all([
+    const [mRes, pRes, sRes] = await Promise.all([
       fetch(`${SERVER_URL}/api/markets`),
       fetch(`${SERVER_URL}/api/paper`),
+      fetch(`${SERVER_URL}/api/settings`),
     ])
     if (!mRes.ok) throw new Error(`markets HTTP ${mRes.status}`)
     if (!pRes.ok) throw new Error(`paper HTTP ${pRes.status}`)
     const mData = (await mRes.json()) as MarketsResponse
     markets = mData.markets ?? []
-    paper = (await pRes.json()) as PaperSummary
+    const pData = (await pRes.json()) as PaperSummary
+    paper = pData
+    // Positions arrive already marked live; keep only the open ones.
+    openPositions = (pData.positions ?? []).filter((p) => p.status === 'open')
+    // A settings 404 (endpoint not landed yet) must not break the refresh
+    // or wipe a good earlier value — keep whatever we already have.
+    if (sRes.ok) {
+      try {
+        settings = (await sRes.json()) as SettingsState
+      } catch {
+        // Keep the previous settings value.
+      }
+    }
+    clampSelections()
     lastError = ''
   } catch (err) {
     lastError = String(err instanceof Error ? err.message : err)
     console.error('refreshData failed:', lastError)
   }
   refreshDisplay()
+}
+
+/** Fetch settings only (used when entering Settings and after a voice
+ *  settings reply). A failure keeps the previous value; never crashes. */
+async function refreshSettings() {
+  try {
+    const res = await fetch(`${SERVER_URL}/api/settings`)
+    if (!res.ok) return
+    settings = (await res.json()) as SettingsState
+    refreshDisplay()
+  } catch (err) {
+    console.error('refreshSettings failed:', err)
+  }
+}
+
+/** POST one settings change (or a reset when `url` is the reset endpoint).
+ *  On success the server's returned settings become the displayed values;
+ *  on failure a short reason is shown on the Settings screen, no crash. */
+async function applySettingsRequest(url: string, body: Record<string, unknown> | null) {
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body === null ? undefined : JSON.stringify(body),
+    })
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+    if (!res.ok) {
+      throw new Error(
+        String(data.error ?? data.reason ?? `HTTP ${res.status}`),
+      )
+    }
+    settings = data as unknown as SettingsState
+    settingsError = ''
+  } catch (err) {
+    settingsError = truncate(
+      String(err instanceof Error ? err.message : err),
+      40,
+    )
+  }
+  refreshDisplay()
+}
+
+async function postSettings(patch: Record<string, unknown>) {
+  await applySettingsRequest(`${SERVER_URL}/api/settings`, patch)
+}
+
+async function resetSettings() {
+  await applySettingsRequest(`${SERVER_URL}/api/settings/reset`, null)
+}
+
+/** Cycle one cap to its next step (wrapping) and POST it. */
+function cycleCap(kind: 'perTrade' | 'daily') {
+  if (!settings) {
+    settingsError = 'Settings unavailable'
+    refreshDisplay()
+    return
+  }
+  if (kind === 'perTrade') {
+    void postSettings({ perTradeCapUsd: nextStep(PER_TRADE_CAP_STEPS, settings.perTradeCapUsd) })
+  } else {
+    void postSettings({ dailyCapUsd: nextStep(DAILY_CAP_STEPS, settings.dailyCapUsd) })
+  }
 }
 
 void refreshData()
@@ -351,6 +581,23 @@ async function stopListeningSilent() {
   await closeMic()
 }
 
+/** Show a draft-mode voice failure on the screen the session started
+ *  from (Market, Positions, or Settings) and go back there. Yes/No mode
+ *  never calls this — it stays on the Draft screen. */
+function showVoiceFailure(msg: string) {
+  if (voiceOrigin === 'positions') {
+    posNote = msg
+    screen = 'positions'
+  } else if (voiceOrigin === 'settings') {
+    settingsError = msg
+    screen = 'settings'
+  } else {
+    voiceError = msg
+    screen = 'market'
+  }
+  refreshDisplay()
+}
+
 /** Begin a listening window. Returns false when the mic cannot be opened. */
 async function startListening(mode: 'draft' | 'yesno'): Promise<boolean> {
   if (listening) return true
@@ -362,10 +609,15 @@ async function startListening(mode: 'draft' | 'yesno'): Promise<boolean> {
   }
   if (!opened) {
     // Mic failure is a screen error, never a crash.
-    voiceError = 'Mic unavailable'
-    screen = 'market'
-    draft = null
-    refreshDisplay()
+    if (mode === 'draft') {
+      draft = null
+      showVoiceFailure('Mic unavailable')
+    } else {
+      voiceError = 'Mic unavailable'
+      screen = 'market'
+      draft = null
+      refreshDisplay()
+    }
     return false
   }
   listening = true
@@ -377,9 +629,13 @@ async function startListening(mode: 'draft' | 'yesno'): Promise<boolean> {
     if (!listening || gotAudio) return
     void (async () => {
       await stopListeningSilent()
-      voiceError = 'No audio heard'
-      screen = 'market'
-      refreshDisplay()
+      if (mode === 'draft') {
+        showVoiceFailure('No audio heard')
+      } else {
+        voiceError = 'No audio heard'
+        screen = 'market'
+        refreshDisplay()
+      }
     })()
   }, NO_AUDIO_MS)
   // Hard cap so a forgotten session cannot record / buffer forever.
@@ -407,14 +663,12 @@ async function stopListeningAndSend() {
   gotAudio = false
   await closeMic()
   if (!heardAnything || chunks.length === 0) {
-    voiceError = 'No audio heard'
     if (mode === 'yesno') {
       // Stay on the draft; tap/ring is still available.
       refreshDisplay()
       return
     }
-    screen = 'market'
-    refreshDisplay()
+    showVoiceFailure('No audio heard')
     return
   }
   const wavBytes = buildWav(concatPcm(chunks))
@@ -469,14 +723,51 @@ async function sendDraftVoice(wav: Blob) {
     // Intent understood but not a buy (or server-side rejection).
     const reason = String(data.reason ?? data.error ?? 'not a buy order')
     const transcript = data.transcript ? String(data.transcript) : ''
-    voiceError = transcript
-      ? `${truncate(transcript, 20)}: ${truncate(reason, 20)}`
-      : truncate(reason, 40)
-    screen = 'market'
-    refreshDisplay()
+    const action = String(data.action ?? '')
+    // Day 4 — voice close: success shows the Closed screen with the real
+    // realised PnL; failure shows the reason on Positions and stays there.
+    if (action === 'close') {
+      if (data.ok && data.position) {
+        const pos = data.position as Record<string, unknown>
+        closedInfo = {
+          id: String(pos.id ?? '?'),
+          realizedPnl: Number(pos.realizedPnl ?? 0),
+        }
+        closeTarget = null
+        posNote = ''
+        voiceError = ''
+        screen = 'closed'
+        refreshDisplay()
+        void refreshData()
+        return
+      }
+      posNote = transcript
+        ? `${truncate(transcript, 20)}: ${truncate(reason, 20)}`
+        : truncate(reason, 40)
+      screen = 'positions'
+      refreshDisplay()
+      return
+    }
+    // Day 4 — voice settings: success re-fetches settings and shows the
+    // Settings screen; failure shows the reason on the screen we came from.
+    if (action === 'settings') {
+      if (data.ok) {
+        await refreshSettings()
+        settingsError = ''
+        screen = 'settings'
+        refreshDisplay()
+        return
+      }
+      showVoiceFailure(truncate(reason, 40))
+      return
+    }
+    showVoiceFailure(
+      transcript
+        ? `${truncate(transcript, 20)}: ${truncate(reason, 20)}`
+        : truncate(reason, 40),
+    )
   } catch (err) {
-    voiceError = `Voice failed: ${shortErr(err)}`
-    screen = 'market'
+    showVoiceFailure(`Voice failed: ${shortErr(err)}`)
     refreshDisplay()
   }
 }
@@ -626,6 +917,105 @@ async function cancelDraft() {
   }
 }
 
+// ── Day 4 — Positions / Settings / Close ─────────────────────────────────
+
+/** Tap on the Positions screen: a position row opens CloseConfirm, the
+ *  Settings row opens Settings (fresh fetch), Back returns Home. */
+function positionsTap() {
+  const n = openPositions.length
+  if (posSel < n) {
+    closeTarget = openPositions[posSel]
+    screen = 'closeConfirm'
+    refreshDisplay()
+    return
+  }
+  if (posSel === n) {
+    settingsError = ''
+    screen = 'settings'
+    void refreshSettings()
+    refreshDisplay()
+    return
+  }
+  screen = 'home'
+  refreshDisplay()
+}
+
+/** Tap on the Settings screen: caps cycle to the next step + POST, the
+ *  allowlist toggles + POST, Reset POSTs the reset endpoint, Back returns
+ *  to Positions. Every POST re-renders with the server-confirmed values. */
+function settingsTapRow() {
+  switch (setSel) {
+    case 0:
+      cycleCap('perTrade')
+      return
+    case 1:
+      cycleCap('daily')
+      return
+    case 2:
+      if (!settings) {
+        settingsError = 'Settings unavailable'
+        refreshDisplay()
+        return
+      }
+      void postSettings({ allowlistEnabled: !settings.allowlistEnabled })
+      return
+    case 3:
+      void resetSettings()
+      return
+    default:
+      screen = 'positions'
+      refreshDisplay()
+      return
+  }
+}
+
+/** Tap on CloseConfirm: POST /api/paper/close. Success → Closed screen
+ *  with the real realised PnL. 404 (already closed / gone) → Positions +
+ *  refresh. Any other failure → Positions with a short reason, no crash. */
+async function confirmClose() {
+  if (!closeTarget) {
+    screen = 'positions'
+    refreshDisplay()
+    return
+  }
+  const id = closeTarget.id
+  try {
+    const res = await fetch(`${SERVER_URL}/api/paper/close`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+    if (res.ok && (data.closed || data.position)) {
+      const pos = (data.position ?? {}) as Record<string, unknown>
+      closedInfo = {
+        id: String(pos.id ?? id),
+        realizedPnl: Number(pos.realizedPnl ?? 0),
+      }
+      closeTarget = null
+      screen = 'closed'
+      refreshDisplay()
+      void refreshData()
+      return
+    }
+    closeTarget = null
+    screen = 'positions'
+    if (res.status !== 404) {
+      posNote = truncate(
+        String(data.error ?? data.reason ?? `Close failed (HTTP ${res.status})`),
+        40,
+      )
+    }
+    refreshDisplay()
+    void refreshData()
+  } catch (err) {
+    closeTarget = null
+    screen = 'positions'
+    posNote = `Close failed: ${shortErr(err)}`
+    refreshDisplay()
+  }
+}
+
 // ── Event routing ────────────────────────────────────────────────────────
 //
 // Same envelope rules as the Day 2 template:
@@ -719,7 +1109,37 @@ const unsubscribe = bridge.onEvenHubEvent((event) => {
       return
     }
     if (screen === 'market' && !listening) {
+      voiceOrigin = 'market'
       void startListening('draft')
+      return
+    }
+    // Day 4 — Home scroll → Positions (Day 2/3 ignored scroll on Home).
+    if (screen === 'home' && !listening) {
+      screen = 'positions'
+      posNote = ''
+      void refreshData()
+      return
+    }
+    // Day 4 — Positions/Settings scroll = move selection, never voice.
+    // SCROLL_TOP (swipe up) = next row, SCROLL_BOTTOM = previous, wraps.
+    if (screen === 'positions' && !listening) {
+      const n = positionsRowCount()
+      const dir = sysType === OsEventTypeList.SCROLL_TOP_EVENT || textType === OsEventTypeList.SCROLL_TOP_EVENT ? 1 : -1
+      posSel = (posSel + dir + n) % n
+      refreshDisplay()
+      return
+    }
+    if (screen === 'settings' && !listening) {
+      const dir = sysType === OsEventTypeList.SCROLL_TOP_EVENT || textType === OsEventTypeList.SCROLL_TOP_EVENT ? 1 : -1
+      setSel = (setSel + dir + 5) % 5
+      refreshDisplay()
+      return
+    }
+    // Day 4 — CloseConfirm scroll = cancel back to Positions.
+    if (screen === 'closeConfirm' && !listening) {
+      closeTarget = null
+      screen = 'positions'
+      refreshDisplay()
       return
     }
     return
@@ -766,8 +1186,47 @@ const unsubscribe = bridge.onEvenHubEvent((event) => {
     return
   }
 
+  // Day 4 — Positions / Settings tap routing (ring tap = voice entry).
+  if (screen === 'positions') {
+    if (isRing) {
+      voiceOrigin = 'positions'
+      posNote = ''
+      void startListening('draft')
+      return
+    }
+    positionsTap()
+    return
+  }
+
+  if (screen === 'settings') {
+    if (isRing) {
+      voiceOrigin = 'settings'
+      settingsError = ''
+      void startListening('draft')
+      return
+    }
+    settingsTapRow()
+    return
+  }
+
+  // Day 4 — CloseConfirm tap = confirm the close; Closed tap → Positions.
+  // (A ring tap here acts as a plain tap; voice entry is only defined for
+  // Home / Market / Positions / Settings.)
+  if (screen === 'closeConfirm') {
+    void confirmClose()
+    return
+  }
+
+  if (screen === 'closed') {
+    screen = 'positions'
+    closedInfo = null
+    void refreshData()
+    return
+  }
+
   if (isRing) {
     // Ring tap: voice entry from Home or Market (glasses tap keeps Day 2).
+    voiceOrigin = 'market'
     voiceError = ''
     void startListening('draft')
     return
