@@ -27,13 +27,13 @@ Demo Day: 3 Dec 2026 (remote). All times below in WIB unless noted.
 - [x] `server/`: `/api/markets` (Gamma + CoinGecko + HL testnet mids, 30 s cache) — done 24 Nov; live E2E: 12 markets, spot BTC $60,223 / ETH $1,694.02, HL testnet mids BTC $59,970.50 / ETH $1,693.15, all 3 sources fulfilled.
 - [x] Paper ledger: positions, place/cancel/close, live mark-to-market PnL — done 24 Nov (`server/src/paper.js`, JSON persistence in `server/data/paper.json`); E2E: $10 YES filled @ 0.475 (21.05 shares), summary + close verified, realized $0.00 (price flat in cache window).
 - [x] Gate policy engine (allowlist, $25/trade, $100/day, ±2% price sanity, duplicate + 60 s cooldown) — done 24 Nov (`server/src/gate.js`); E2E: $10 YES PASS 7/7; $30 REJECT (per-trade cap); stale price +10% REJECT (price sanity); unknown market REJECT (allowlist + price sanity); duplicate place 403 (duplicate guard + cooldown). Unit tests 4/4 (`npm test`).
-- [x] G2 app: Home + Market screens rendering live data in simulator — app code DONE 24 Nov (`app/src/main.ts`: Home top market + book PnL, Market odds/volume/ends, tap toggles, double-tap exits mode 1, 30 s refresh, error state); `npm run build` clean (tsc + vite); Vite dev serving on http://localhost:5173. Rendering in the SIMULATOR not yet verified — same webkit-libs blocker as Day 1 (apt install still running).
+- [x] G2 app: Home + Market screens rendering live data in simulator — app code DONE 24 Nov (`app/src/main.ts`: Home top market + book PnL, Market odds/volume/ends, tap toggles, double-tap exits mode 1, 30 s refresh, error state); `npm run build` clean (tsc + vite); Vite dev serving on http://localhost:5173. Rendering in the SIMULATOR VERIFIED 24 Nov (Day 3 run): `GET /api/ping` → pong, Home 2832 lit px, tap → Market 3300 lit px, 0 console errors; screenshots in `docs/screenshots/day3-*`. Note: screenshot PNG kanal RGB hijau polos, isi layar di kanal alpha.
 
 ## Day 3 — Wed 25 Nov (voice loop)
 
-- [ ] Mic audio → server `/api/voice` (Groq Whisper → intent → drafted action)
-- [ ] Draft / Confirm screen (3 lines: action + gate verdict + Yes/No)
-- [ ] Tap / ring / voice "Yes" → paper fill → confirmation screen
+- [x] Mic audio → server `/api/voice` (Groq Whisper → intent → drafted action) — done 24 Nov: `server/src/voice.js` (Whisper `whisper-large-v3-turbo` + intent `openai/gpt-oss-20b`, draft store TTL 5 mnt, confirm/cancel/GET draft, yes/no turn); E2E wav nyata "Buy $10 yes." → draft PASS 7/7 → fill. Surrogate Groq bisa dipakai ulang (bukan sekali pakai). Lihat `docs/day3-verification.md`.
+- [x] Draft / Confirm screen (3 lines: action + gate verdict + Yes/No) — done 24 Nov: `app/src/main.ts` + `app/src/voice.ts`; `BUY $10 YES @ 64¢` · `Gate: PASS 7/7` · `Tap / ring / "Yes" to confirm`. Long-press TIDAK ADA di SDK → batal via suara "No" / swipe di Draft. Trigger: ring tap (source=2) atau swipe di Market (fallback).
+- [x] Tap / ring / voice "Yes" → paper fill → confirmation screen — done 24 Nov: confirm via tap/ring (`POST /api/voice/confirm`, gate fresh) atau suara "Yes" (yes-turn); Filled screen `FILLED $10 YES @ 64¢ · Position #N · PAPER`. E2E koordinator: posisi #5 YES $10 @ 0.525. Simulator: Home/Market + trigger swipe + `Mic unavailable` terverifikasi di kaca (screenshot `docs/screenshots/day3-*`). Render Draft/Filled + ring tap + mic sungguhan BELUM terverifikasi — butuh hardware G2.
 
 ## Day 4 — Thu 26 Nov (positions + Telegram)
 
