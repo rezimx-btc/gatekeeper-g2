@@ -7,7 +7,7 @@
   "private": true,
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test tests/gate.test.js tests/voice.test.js"
+    "test": "node --test tests/gate.test.js tests/voice.test.js tests/settings.test.js"
   },
   "type": "module",
   "version": "0.1.0"
