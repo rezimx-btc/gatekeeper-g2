@@ -1,1 +1,14 @@
-{"description":"Gatekeeper backend: markets, paper ledger, gate policy, voice, Telegram mirror","engines":{"node":">=22"},"name":"gatekeeper-server","private":true,"scripts":{"start":"node src/index.js","test":"node --test tests/gate.test.js"},"type":"module","version":"0.1.0"}
+{
+  "description": "Gatekeeper backend: markets, paper ledger, gate policy, voice, Telegram mirror",
+  "engines": {
+    "node": ">=22"
+  },
+  "name": "gatekeeper-server",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test tests/gate.test.js tests/voice.test.js"
+  },
+  "type": "module",
+  "version": "0.1.0"
+}
